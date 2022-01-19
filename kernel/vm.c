@@ -300,10 +300,10 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
+  //printf("uvmcopy\n");
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  //char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -311,15 +311,13 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    *pte &= ~PTE_W;
     flags = PTE_FLAGS(*pte);
-
-    flags &= ~PTE_W; //read_only
-
+    //flags &= ~PTE_W; //read_only
+    increase_ref_counter(pa);
     if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;
     }
-
-    *pte &= ~PTE_W;
   }
   return 0;
 
@@ -353,8 +351,14 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     va0 = PGROUNDDOWN(dstva);
     if (va0 > MAXVA)
       return -1;
-    if(cowfault(pagetable,va0)!=0)
+    //by trying to write something in a pagetable
+    //but this pagetable prolly shares info with other processes
+    //so in order to avoid bugging out the other precesses
+    //we create copies of pagetables
+    if(cowfault(pagetable,va0)!=0) 
+    {
       return -1;
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -438,7 +442,25 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   }
 }
 
-int cowfault(pagetable_t pagetable, uint64 va)
+int 
+cowfault(pagetable_t pagetable, uint64 va)
 {
+  //printf("cowfault\n");
+  if (va >= MAXVA) 
+    return -1;
+  pte_t *pte = walk(pagetable, va, 0);
+  if(pte==0)
+    return -1;
+  if ((*pte & PTE_U) == 0 || (*pte & PTE_V) == 0)
+    return -1;
+  
+  uint64 page1 = PTE2PA(*pte); //get the old page
+  uint64 page2;
+  if ( (page2 = (uint64)kalloc()) == 0 ) //allocate a new page
+    return -1;
 
+  memmove((void *)page2, (void *)page1, PGSIZE); //copy from page1 to page2
+  *pte = PA2PTE(page2) | PTE_U | PTE_V | PTE_R | PTE_W | PTE_X; // user + valid + read + write + execute
+  kfree((void*)page1);
+  return 0;
 }

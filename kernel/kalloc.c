@@ -39,17 +39,19 @@ freerange(void *pa_start, void *pa_end)
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
   {
-    ref_count[(uint64)p] = 1;
+    ref_count[(uint64)p/PGSIZE] = 0;
     kfree(p);
   }
 }
 
-void increase_ref_counter(uint64 p)
+void 
+increase_ref_counter(uint64 p)
 {
+  //printf("increase\n");
   acquire(&kmem.lock);  //get the lock
   int index = p/PGSIZE; //get the index for referece counter
-  if(p>PHYSTOP)
-    panic("cannot increase reference counter");
+  if(p>=PHYSTOP || ref_count[index]<1)
+    panic("increase: problem with ref_counter");
   ref_count[index]++;   //increase reference counter by 1
   release(&kmem.lock);  //release the lock
 }
@@ -62,21 +64,18 @@ void
 kfree(void *pa)
 {
   struct run *r;
-
+  r = (struct run *)pa;
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  acquire(&kmem.lock);  //get the lock
-  int index = (uint64)r/PGSIZE; //find the index in reference counter
-  if(ref_count[index]<1)
-    panic("kfree: cannot decrease referece counter");
-  ref_count[index]--;
-  int curr_counter = ref_count[index];  //hold it temporarily to check if it is 0
+  acquire(&kmem.lock);
+  if (ref_count[(uint64)r / PGSIZE] > 0)
+    ref_count[(uint64)r / PGSIZE]--;
+  int check = ref_count[(uint64)r / PGSIZE];
   release(&kmem.lock);
 
-  if(curr_counter != 0)
+  if(check>0)
     return;
-
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -94,15 +93,22 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
-  struct run *r;
+  struct run *r;  
 
   acquire(&kmem.lock);
   r = kmem.freelist;
   if(r)
+  { 
+    ref_count[(uint64)r/PGSIZE] = 1;
     kmem.freelist = r->next;
+  }
   release(&kmem.lock);
+  
 
   if(r)
+  {
+    //ref_count[(uint64)r/PGSIZE] = 1;
     memset((char*)r, 5, PGSIZE); // fill with junk
+  }
   return (void*)r;
 }

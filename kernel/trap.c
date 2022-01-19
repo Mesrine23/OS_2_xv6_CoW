@@ -67,13 +67,8 @@ usertrap(void)
     syscall();
   } else if (r_scause() == 15) {
 
-    //add code here -> cow handler
-    /*
-    ~check if it is a valid cow fork fault (not a random read-only error)
-    ~if user page then: create new page with kalloc() and copy(!) the correct data
-    ~reduce ref_count(--)
-    ~note: ref_count++ in uvmcopy for pa 
-    */
+    // if a read-only error happens
+    // call CoW handler
     if(cowfault(p->pagetable,r_stval())!=0)
       p->killed=1; 
 
